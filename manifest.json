@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "funcoder.app-shortcuts",
+  "name": "App Shortcuts",
+  "version": "0.1.0",
+  "author": "funcoder",
+  "license": "MIT",
+  "description": "Press a key to see the keyboard shortcuts for the app you're using: web apps by site, programs running inside a terminal, and your Hyprland bindings. Keeps a library of every installed app and looks up newly installed ones with Claude.",
+  "keywords": ["shortcuts", "keybindings", "cheatsheet", "help", "keyboard"],
+  "kinds": ["overlay", "service"],
+  "entryPoints": {
+    "overlay": "Shortcuts.qml",
+    "service": "Service.qml"
+  }
+}
