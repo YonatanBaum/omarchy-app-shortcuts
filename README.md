@@ -63,20 +63,42 @@ Lookups run `claude -p` with no MCP servers and no settings files. Web and
 desktop apps get no tools, so each is a single answer from the model's
 knowledge; terminal programs get WebFetch and WebSearch only.
 
+## Requirements
+
+- [Omarchy](https://omarchy.org) 4 (the Quickshell-based shell with plugins) and
+  Python 3, both included with Omarchy.
+- The [Claude Code](https://claude.com/claude-code) CLI (`claude`), signed in,
+  for looking up apps that have no shortcuts yet. Without it the sheet still
+  shows your Hyprland bindings, your Neovim keymaps and any shortcut files you
+  write yourself.
+
 ## Install
 
-```bash
-./deploy-local.sh                              # copy into ~/.config/omarchy/plugins and validate
-omarchy plugin enable funcoder.app-shortcuts
+```sh
+omarchy plugin add https://github.com/funcoder/omarchy-app-shortcuts.git --enable
 ```
 
-Then bind a key in `~/.config/hypr/bindings.lua`:
+Then bind a key in `~/.config/hypr/bindings.lua` and run `hyprctl reload`:
 
 ```lua
 o.bind("SUPER + SHIFT + K", "App shortcuts", "omarchy-shell shell toggle funcoder.app-shortcuts '{}'")
 ```
 
-Re-run `./deploy-local.sh` after editing. The shell hot-reloads the copy.
+Update with `omarchy plugin update funcoder.app-shortcuts`.
+
+## Remove
+
+```sh
+omarchy plugin remove funcoder.app-shortcuts
+rm -rf ~/.local/share/funcoder-app-shortcuts   # optional: the shortcut library
+```
+
+Also delete the key binding from `~/.config/hypr/bindings.lua`.
+
+## Development
+
+`./deploy-local.sh` copies a checkout into `~/.config/omarchy/plugins` and
+validates it. Re-run it after editing. The shell hot-reloads the copy.
 
 ## Command line
 
