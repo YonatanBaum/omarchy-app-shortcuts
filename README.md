@@ -29,11 +29,14 @@ the answer, so opening the sheet afterwards is instant and offline.
   plugins change.
 - **Other terminal programs** are often too new or niche for the model to
   know, so their lookup is grounded: the helper collects the program's
-  `--help` output, its man page and any config files under `~/.config/<name>/`
-  that mention keys or bindings (lines that look like secrets are removed), and
-  Claude may read the project's docs and source on the web. Bindings changed in
-  your config win over the defaults, and the lookup runs again when those files
-  change.
+  `--help` output, its man page and the keys you have bound in your own config
+  under `~/.config/<name>/`. Your config files are never sent anywhere — they
+  are parsed here, and only the key combination and the action it runs are
+  passed on, each checked against a strict format and length. Bindings changed
+  in your config win over the defaults, and the lookup runs again when those
+  files change. If that local material doesn't cover the program, the helper
+  asks again from the web using only the app's name and package, so nothing
+  read off your machine ever reaches a request that can browse.
 - Failed lookups are retried after a day. **Ctrl + R** in the sheet looks the
   current app up again.
 
@@ -61,7 +64,9 @@ App keys look like `web:x.com`, `tui:nvim` or `app:spotify`.
 
 Lookups run `claude -p` with no MCP servers and no settings files. Web and
 desktop apps get no tools, so each is a single answer from the model's
-knowledge; terminal programs get WebFetch and WebSearch only.
+knowledge. For terminal programs the grounded pass also runs with no tools;
+only the follow-up web pass gets WebFetch and WebSearch, and it is sent
+nothing but the app's identity.
 
 ## Requirements
 
