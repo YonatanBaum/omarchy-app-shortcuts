@@ -14,8 +14,9 @@ import qs.Ui
 // in the background; the sheet polls until the result lands.
 //
 // Keys: type to filter, Tab / Left / Right switch between the app and
-// Hyprland, Up / Down / Page Up / Page Down scroll, Ctrl+R looks the app up
-// again, Escape clears the filter and then closes.
+// Hyprland, Up / Down / Page Up / Page Down scroll, Enter accepts a lookup the
+// sheet offers, Ctrl+R looks the app up again, Escape clears the filter and
+// then closes.
 Item {
   id: root
 
@@ -32,6 +33,15 @@ Item {
   property var hyprSections: []
   property int tab: 0
   property string filterText: ""
+  property string lookupMode: "ask"
+  property bool stale: false
+
+  // Ask mode looks nothing up on its own, so the sheet offers it instead: for an
+  // app it knows nothing about, and for one whose stored shortcuts went stale.
+  readonly property bool askPrompt: tab === 0 && !!app && lookupMode === "ask"
+                                    && (status === "missing" || status === "failed")
+  readonly property bool staleOffer: tab === 0 && !!app && lookupMode === "ask"
+                                     && status === "ready" && stale
 
   readonly property string pluginId: (manifest && manifest.id) || "funcoder.app-shortcuts"
   readonly property string helper: {
@@ -72,8 +82,7 @@ Item {
     tab = 0
     filterText = ""
     rebuild()
-    currentProc.command = [helper, "current"]
-    currentProc.running = true
+    refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
@@ -112,6 +121,8 @@ Item {
   function applyApp(data) {
     app = data.app || null
     status = String(data.status || (data.error ? "failed" : ""))
+    lookupMode = String(data.lookupMode || lookupMode)
+    stale = data.stale === true
     errorText = String(data.error || "")
     source = String(data.source || "")
     appSections = Array.isArray(data.sections) ? data.sections : []
@@ -120,8 +131,14 @@ Item {
     rebuild()
   }
 
+  function refresh() {
+    currentProc.command = [helper, "current"]
+    currentProc.running = true
+  }
+
+
   function relookup() {
-    if (!app || status === "pending") return
+    if (!app || status === "pending" || lookupMode === "off") return
     Quickshell.execDetached([helper, "lookup", app.key, "--force", "--background"])
     status = "pending"
     appSections = []
@@ -171,9 +188,10 @@ Item {
   function kindText() {
     if (!app) return "Nothing focused"
     var key = String(app.key || "")
-    if (app.kind === "web") return "Web app · " + key.replace(/^web:/, "")
-    if (app.kind === "tui") return "Terminal program · " + key.replace(/^tui:/, "")
-    return "App"
+    var note = staleOffer ? " · out of date, press Enter to refresh" : ""
+    if (app.kind === "web") return "Web app · " + key.replace(/^web:/, "") + note
+    if (app.kind === "tui") return "Terminal program · " + key.replace(/^tui:/, "") + note
+    return "App" + note
   }
 
   function emptyText() {
@@ -182,7 +200,12 @@ Item {
       if (!app) return "No window has focus"
       if (status === "pending") return app && app.key === "tui:nvim"
         ? "Reading your Neovim keymaps…" : "Looking up " + appName + " shortcuts with Claude…"
+      if (askPrompt) return status === "failed"
+        ? "Lookup failed: " + (errorText || "unknown error") + " — press Enter to try again"
+        : "No shortcuts for " + appName + " yet. Want me to look them up with Claude? Press Enter."
       if (status === "failed") return "Lookup failed: " + (errorText || "unknown error")
+      if (lookupMode === "off" && appSections.length === 0)
+        return "No shortcuts stored for " + appName + " — lookups are off"
     }
     if (filterText !== "") return "No matches for “" + filterText + "”"
     return tab === 0 ? "No shortcuts known for " + appName : "No Hyprland keybindings found"
@@ -190,7 +213,9 @@ Item {
 
   function footerText() {
     var parts = ["Tab switch", "Esc close"]
-    if (tab === 0 && app && status !== "pending") parts.unshift("Ctrl+R look up again")
+    if (tab === 0 && (askPrompt || staleOffer)) parts.unshift("Enter look up with Claude")
+    else if (tab === 0 && app && status !== "pending" && lookupMode !== "off")
+      parts.unshift("Ctrl+R look up again")
     if (tab === 0 && source === "user") parts.unshift("Edited by you")
     else if (tab === 0 && source === "claude") parts.unshift("Looked up by Claude")
     else if (tab === 0 && source === "nvim") parts.unshift("Read from your Neovim config")
@@ -285,6 +310,9 @@ Item {
             if (root.filterText) root.setFilter("")
             else root.dismiss()
           } else if (ctrl && event.key === Qt.Key_R) {
+            root.relookup()
+          } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                     && (root.askPrompt || root.staleOffer)) {
             root.relookup()
           } else if (Util.editsFilter(event, root.filterText)) {
             root.setFilter(Util.editedFilter(event, root.filterText))

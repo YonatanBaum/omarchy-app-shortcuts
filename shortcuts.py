@@ -6,7 +6,7 @@ first met as a focused window), looks up each app's shortcuts once with the
 Claude CLI, and answers "what are the shortcuts for the window I'm on?".
 
 Commands (every command prints one line of JSON):
-  current              shortcuts for the focused window (starts a lookup if needed)
+  current              shortcuts for the focused window (in auto mode, starts a lookup if needed)
   show <key>           shortcuts for one app key, e.g. web:x.com, tui:nvim, app:spotify
   lookup <key> [--force]
                        look an app up now (--force replaces an existing entry)
@@ -16,8 +16,8 @@ Commands (every command prints one line of JSON):
 Data lives in $XDG_DATA_HOME/funcoder-app-shortcuts/:
   apps.json            inventory
   shortcuts/<key>.json one file per app; set "source": "user" to stop it being replaced
-  config.json          model, concurrency, ignore patterns
-  lookup.log           lookup failures
+  config.json          lookups ("auto" | "ask" | "off"; unset until chosen), model, concurrency, ignore
+  lookup.log           one line per lookup that ran, plus any failure
 """
 
 import argparse
@@ -46,6 +46,7 @@ CONFIG_FILE = DATA / "config.json"
 LOG_FILE = DATA / "lookup.log"
 
 DEFAULT_CONFIG = {
+    "lookups": "ask",
     "model": "claude-sonnet-5",
     "concurrency": 3,
     "timeoutSeconds": 180,
@@ -58,6 +59,8 @@ DEFAULT_CONFIG = {
         "foot-server", "footclient", "uuctl", "nm-connection-editor",
     ],
 }
+
+LOOKUP_MODES = ("auto", "ask", "off")
 
 # Earlier directories win when the same desktop file name appears twice.
 APP_DIRS = [
@@ -144,6 +147,12 @@ def load_config():
     config = dict(DEFAULT_CONFIG)
     config.update(read_json(CONFIG_FILE, {}) or {})
     return config
+
+
+def lookup_mode(config):
+    """auto: look an app up as soon as it turns up · ask: only on an explicit request · off: never."""
+    value = str(config.get("lookups", "ask")).strip().lower()
+    return value if value in LOOKUP_MODES else "ask"
 
 
 @contextmanager
@@ -963,6 +972,8 @@ def prompt_for(app, evidence=None, web=False):
 
 
 def run_claude(app, config, evidence=None, web=False):
+    if lookup_mode(config) == "off":
+        raise RuntimeError('lookups are off (set "lookups" to "auto" or "ask" in config.json)')
     claude = find_claude(config)
     if not claude:
         raise RuntimeError("Claude CLI not found (set claudePath in config.json)")
@@ -1001,7 +1012,8 @@ def is_researched(app):
     return app.get("kind") == "tui" and app["key"] not in NATIVE
 
 
-def needs_lookup(key, config, app=None):
+def entry_stale(key, config, app=None):
+    """True when the stored shortcuts are out of date, whatever the lookup mode says."""
     entry = read_json(shortcuts_path(key))
     if key in NATIVE:
         return native_stale(key)
@@ -1020,6 +1032,14 @@ def needs_lookup(key, config, app=None):
     return False
 
 
+def needs_lookup(key, config, app=None):
+    """Whether the helper may look this app up unasked: only auto mode ever may."""
+    # Neovim keymaps are read from Neovim itself, so they refresh in every mode.
+    if key in NATIVE:
+        return native_stale(key)
+    return lookup_mode(config) == "auto" and entry_stale(key, config, app)
+
+
 def lookup(app, config, force=False):
     key = app["key"]
     if key in NATIVE:
@@ -1027,6 +1047,12 @@ def lookup(app, config, force=False):
         if entry.get("source") == "user" and not force:
             return "exists"
         return refresh_native(key) if force or native_stale(key) else "exists"
+    mode = lookup_mode(config)
+    if mode == "off":
+        return "off"
+    # In ask mode a lookup runs only when the user asked for this one by name.
+    if mode == "ask" and not force:
+        return "ask"
     with file_lock(f"lookup-{safe_name(key)}", blocking=False) as taken:
         if not taken:
             return "pending"
@@ -1037,6 +1063,8 @@ def lookup(app, config, force=False):
             return "exists"
         researched = is_researched(app)
         evidence = local_evidence(app) if researched else None
+        # One line per lookup that reaches the model, so the log shows what ran and why.
+        log(f"{key}: asking {config['model']} ({'requested' if force else mode})")
         try:
             result = run_claude(app, config, evidence)
             # Nothing in the local material: ask again from the web, sending only
@@ -1082,7 +1110,7 @@ def hyprland_bindings():
     return [{"title": "Hyprland keybindings", "shortcuts": shortcuts}] if shortcuts else []
 
 
-def payload_for(app):
+def payload_for(app, config=None, stale=False):
     key = app["key"]
     entry = read_json(shortcuts_path(key)) or {}
     pending = is_pending(key)
@@ -1094,6 +1122,7 @@ def payload_for(app):
         status = "ready"
     else:
         status = "missing"
+    config = config or load_config()
     return {
         "app": {"key": key, "kind": app.get("kind", "gui"), "name": entry.get("name") or app.get("name") or key},
         "status": status,
@@ -1101,6 +1130,9 @@ def payload_for(app):
         "source": entry.get("source", ""),
         "updatedAt": entry.get("updatedAt", ""),
         "error": entry.get("error", "") if status == "failed" else "",
+        "lookupMode": lookup_mode(config),
+        # Set for a single app only: the sheet offers a refresh when its entry went stale.
+        "stale": bool(stale),
     }
 
 
@@ -1113,8 +1145,10 @@ def emit(value):
 
 def cmd_current(args):
     window = active_window()
+    config = load_config()
     if not window:
-        emit({"app": None, "status": "none", "sections": [], "hyprland": hyprland_bindings()})
+        emit({"app": None, "status": "none", "sections": [], "lookupMode": lookup_mode(config),
+              "hyprland": hyprland_bindings()})
         return
     apps = load_apps()
     app = identify(window, apps)
@@ -1122,9 +1156,11 @@ def cmd_current(args):
         app = remember(app, window)
     if app["key"] in NATIVE and native_stale(app["key"]):
         refresh_native(app["key"])
-    payload = payload_for(app)
-    if payload["status"] == "missing" or (payload["status"] != "pending" and app["key"] not in NATIVE
-                                          and needs_lookup(app["key"], load_config(), app)):
+    payload = payload_for(app, config, stale=entry_stale(app["key"], config, app))
+    # Only auto mode starts a lookup by itself; ask mode waits for the sheet to ask.
+    may_start = app["key"] in NATIVE or lookup_mode(config) == "auto"
+    if may_start and (payload["status"] == "missing" or (payload["status"] != "pending"
+                      and app["key"] not in NATIVE and needs_lookup(app["key"], config, app))):
         start_background_lookup(app["key"])
         payload["status"] = "pending"
         payload["sections"] = []
@@ -1142,7 +1178,9 @@ def app_for_key(key):
 
 
 def cmd_show(args):
-    emit(payload_for(app_for_key(args.key)))
+    app = app_for_key(args.key)
+    config = load_config()
+    emit(payload_for(app, config, stale=entry_stale(app["key"], config, app)))
 
 
 def cmd_lookup(args):
@@ -1179,8 +1217,9 @@ def cmd_sync(args):
 
 def cmd_list(args):
     rows = []
+    config = load_config()
     for key, app in load_apps().items():
-        payload = payload_for(app)
+        payload = payload_for(app, config)
         rows.append({"key": key, "name": payload["app"]["name"], "kind": app.get("kind"), "source": app.get("source"),
                      "status": payload["status"], "shortcuts": sum(len(s["shortcuts"]) for s in payload["sections"])})
     emit({"apps": rows})

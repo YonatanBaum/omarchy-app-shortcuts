@@ -47,7 +47,7 @@ Files live in `~/.local/share/funcoder-app-shortcuts/`:
 | `apps.json` | Inventory of installed and discovered apps |
 | `shortcuts/<key>.json` | Shortcuts for one app. Edit freely; set `"source": "user"` so it's never replaced |
 | `config.json` | Model, concurrency, timeout, ignore patterns |
-| `lookup.log` | Lookup failures |
+| `lookup.log` | Lookups that ran, and any failures |
 
 App keys look like `web:x.com`, `tui:nvim` or `app:spotify`.
 
@@ -55,6 +55,7 @@ App keys look like `web:x.com`, `tui:nvim` or `app:spotify`.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
+| `lookups` | `"ask"` | When lookups may run: `"auto"`, `"ask"` or `"off"` |
 | `model` | `claude-sonnet-5` | Model used for lookups |
 | `concurrency` | `3` | Lookups run at once during a sync |
 | `timeoutSeconds` | `180` | Per-lookup timeout |
